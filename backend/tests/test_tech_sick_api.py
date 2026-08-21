@@ -93,7 +93,7 @@ def test_analyze_rejects_non_instagram_profile_host(auth_client):
 
 
 def test_analyze_live_profile_returns_profile_intelligence(auth_client):
-    response = auth_client.post(f"{BASE_URL}/api/analyze", json={"profile_url": "@glossier"}, timeout=30)
+    response = auth_client.post(f"{BASE_URL}/api/analyze", json={"profile_url": "@glossier"}, timeout=150)
     assert response.status_code == 200
     payload = response.json()
     assert payload["profile"]["username"] == "glossier"
@@ -116,3 +116,12 @@ def test_analyze_live_profile_returns_profile_intelligence(auth_client):
     assert sum(h["share"] for h in intel["hook_archetypes"]) == 100
     assert sum(m["pct"] for m in intel["content_mix"]) == 100
     assert len(intel["pitch"]) > 100
+    analytics = payload["analytics"]
+    assert analytics["cadence_label"]
+    assert analytics["posts_analyzed"] > 0
+    assert analytics["consistency_status"] in ["Highly Consistent", "Moderate / Sporadic", "Inactive"]
+    assert 1 <= analytics["consistency_score"] <= 100
+    assert analytics["engagement_tier"] in ["Below Average", "Average", "Above Average", "Exceptional"]
+    assert analytics["location"]["confidence"] in ["High", "Medium", "Low"]
+    assert analytics["community_pulse"]
+    assert analytics["responsiveness"] in ["Active Responder", "Passive Broadcaster", "Unknown"]

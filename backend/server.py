@@ -50,6 +50,7 @@ class AnalyzeRequest(BaseModel):
 class AnalyzeResponse(BaseModel):
     profile: dict
     intelligence: dict
+    analytics: dict
     source: str
     analyzed_at: str
 
@@ -156,6 +157,49 @@ def scrape_profile(url: str) -> dict:
         raise RuntimeError("Apify returned no public profile data for this handle.")
     return items[0]
 
+def scrape_comments(post_urls: list) -> list:
+    token = os.environ.get("APIFY_TOKEN")
+    if not token:
+        return []
+    client = ApifyClient(token)
+    run = client.actor("apify/instagram-scraper").call(run_input={"resultsType": "comments", "directUrls": post_urls, "resultsLimit": 40})
+    return list(client.dataset(run.default_dataset_id).iterate_items())
+
+def compute_metrics(raw: dict, comments: list) -> dict:
+    posts = [p for p in (raw.get("latestPosts") or []) if isinstance(p, dict)]
+    stamps = []
+    for p in posts:
+        t = p.get("timestamp") or p.get("takenAt")
+        if not t:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(t).replace("Z", "+00:00"))
+            stamps.append(dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc))
+        except ValueError:
+            continue
+    stamps.sort()
+    followers = raw.get("followersCount") or 0
+    likes = [p.get("likesCount") or 0 for p in posts]
+    cmts = [p.get("commentsCount") or 0 for p in posts]
+    avg_likes = round(sum(likes) / len(likes)) if likes else 0
+    avg_comments = round(sum(cmts) / len(cmts)) if cmts else 0
+    engagement_rate = round((avg_likes + avg_comments) / followers * 100, 2) if followers else None
+    comment_like_ratio = round(avg_comments / avg_likes * 100, 2) if avg_likes else None
+    cadence_label = "Unknown"
+    last_post_days_ago = None
+    if stamps:
+        last_post_days_ago = (datetime.now(timezone.utc) - stamps[-1]).days
+        if len(stamps) >= 2:
+            span = max((stamps[-1] - stamps[0]).days, 1)
+            per_week = round(len(stamps) / span * 7, 1)
+            cadence_label = "Daily" if per_week >= 6.5 else ("Irregular" if span < 7 else f"{per_week} posts/week")
+    owner = (raw.get("username") or "").lower()
+    owner_comments = [c for c in comments if (c.get("ownerUsername") or "").lower() == owner]
+    reply_rate = round(len(owner_comments) / len(comments) * 100) if comments else None
+    location_names = sorted({p.get("locationName") for p in posts if p.get("locationName")})[:6]
+    comment_samples = [(c.get("text") or "")[:160] for c in comments if (c.get("ownerUsername") or "").lower() != owner][:12]
+    return {"cadence_label": cadence_label, "last_post_days_ago": last_post_days_ago, "posts_analyzed": len(posts), "avg_likes": avg_likes, "avg_comments": avg_comments, "engagement_rate": engagement_rate, "comment_like_ratio": comment_like_ratio, "owner_reply_rate": reply_rate, "location_names": location_names, "comment_samples": comment_samples}
+
 def build_ai_context(raw: dict) -> dict:
     posts = raw.get("latestPosts") or []
     captions = [(p.get("caption") or "")[:280] for p in posts[:12] if isinstance(p, dict)]
@@ -168,10 +212,14 @@ def build_ai_context(raw: dict) -> dict:
         "postsCount": raw.get("postsCount"), "recent_captions": captions, "hashtags": hashtags,
     }
 
-async def classify_profile(raw: dict) -> dict:
+async def classify_profile(raw: dict, metrics: dict, comments: list) -> dict:
     key = os.environ.get("EMERGENT_LLM_KEY")
     if not key:
         raise RuntimeError("EMERGENT_LLM_KEY is not configured.")
+    context = build_ai_context(raw)
+    context["posting_metrics"] = {k: v for k, v in metrics.items() if k not in {"comment_samples", "location_names"}}
+    context["location_hints"] = {"biography": raw.get("biography"), "externalUrl": raw.get("externalUrl"), "post_geotags": metrics.get("location_names", [])}
+    context["comment_samples"] = metrics.get("comment_samples", [])
     prompt = f'''Analyze this public Instagram profile for commercial intelligence. Return ONLY valid JSON with these keys:
 - classification (string like "B2C E-Commerce" or "B2B SaaS")
 - pillars (array of 3 content pillar strings)
@@ -190,7 +238,15 @@ async def classify_profile(raw: dict) -> dict:
 - sponsorship_readiness (exactly one of "Low", "Medium", "High", based on posting consistency, promo ratio and engagement signals)
 - collab_fit_score (integer 1-100 brand partnership readiness)
 - pitch (80-120 word personalized cold outreach email referencing this brand's gaps and recent content themes)
-Base everything on the provided data only. Profile: {json.dumps(build_ai_context(raw), ensure_ascii=True)}'''
+- audience_analytics (object with these sub-keys):
+  - consistency_score (integer 1-100 based on posting gaps, rhythm and recency of the last post)
+  - consistency_status (exactly one of "Highly Consistent", "Moderate / Sporadic", "Inactive")
+  - consistency_note (one sentence explaining the posting frequency trend)
+  - engagement_tier (exactly one of "Below Average", "Average", "Above Average", "Exceptional"; roughly 1-3% engagement is average, adjust expectations for follower size)
+  - community_pulse (short label like "High Trust & Questions", "High Hype / Emojis Only", or "Customer Support Inquiries", based on the comment samples)
+  - responsiveness (exactly one of "Active Responder", "Passive Broadcaster", "Unknown", based on the owner comment-reply rate)
+  - location (object {{"city": string or null, "state": string or null, "country": string or null, "flag": string with the country flag emoji or "", "confidence": "High"|"Medium"|"Low"}} aggregated from bio, external links and post geotags; never invent a location without evidence)
+Base everything on the provided data only. Profile: {json.dumps(context, ensure_ascii=True)}'''
     chat = LlmChat(api_key=key, session_id=f"profile-{uuid.uuid4()}", system_message="You are a precise B2B social intelligence analyst. Output strict JSON.").with_model("gemini", "gemini-3-flash-preview")
     result = ""
     async for event in chat.stream_message(UserMessage(text=prompt)):
@@ -207,7 +263,15 @@ async def analyze_profile(input: AnalyzeRequest, user: dict = Depends(get_curren
     url = normalize_profile_url(input.profile_url)
     try:
         raw = await run_in_threadpool(scrape_profile, url)
-        intelligence = await classify_profile(raw)
+        post_urls = [(p.get("url") or f"https://www.instagram.com/p/{p.get('shortCode')}/") for p in (raw.get("latestPosts") or [])[:4] if isinstance(p, dict) and (p.get("url") or p.get("shortCode"))]
+        comments = []
+        if post_urls:
+            try:
+                comments = await run_in_threadpool(scrape_comments, post_urls)
+            except Exception as exc:
+                logger.warning("Comment scrape failed, continuing without: %s", exc)
+        metrics = compute_metrics(raw, comments)
+        intelligence = await classify_profile(raw, metrics, comments)
     except HTTPException:
         raise
     except Exception as exc:
@@ -215,7 +279,8 @@ async def analyze_profile(input: AnalyzeRequest, user: dict = Depends(get_curren
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     profile = {key: raw.get(key) for key in ["username", "fullName", "biography", "externalUrl", "externalUrls", "followersCount", "followsCount", "postsCount", "verified", "isBusinessAccount", "businessCategoryName", "profilePicUrl", "profilePicUrlHD"]}
     profile["profile_pic_url"] = raw.get("profilePicUrlHD") or raw.get("profilePicUrl")
-    response = {"profile": profile, "intelligence": intelligence, "source": "Apify public Instagram Scraper + Gemini 3 Flash", "analyzed_at": datetime.now(timezone.utc).isoformat()}
+    analytics = {**{k: v for k, v in metrics.items() if k not in {"comment_samples", "location_names"}}, **intelligence.pop("audience_analytics", {})}
+    response = {"profile": profile, "intelligence": intelligence, "analytics": analytics, "source": "Apify public Instagram Scraper + Gemini 3 Flash", "analyzed_at": datetime.now(timezone.utc).isoformat()}
     await db.analysis_runs.insert_one({**response, "user_id": user["user_id"], "created_at": response["analyzed_at"]})
     return response
 

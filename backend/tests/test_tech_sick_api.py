@@ -1,7 +1,10 @@
 import os
+import uuid
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import requests
+from pymongo import MongoClient
 
 
 BACKEND_URL = os.environ.get("REACT_APP_BACKEND_URL")
@@ -14,9 +17,31 @@ if not BACKEND_URL:
 BASE_URL = BACKEND_URL.rstrip("/")
 
 
+def _backend_env(key):
+    for line in open("/app/backend/.env"):
+        if line.startswith(key + "="):
+            return line.split("=", 1)[1].strip().strip('"')
+    raise RuntimeError(f"{key} not found in backend/.env")
+
+
 @pytest.fixture
 def api_client():
     return requests.Session()
+
+
+@pytest.fixture
+def auth_client():
+    session = requests.Session()
+    mongo = MongoClient(_backend_env("MONGO_URL"))
+    db = mongo[_backend_env("DB_NAME")]
+    user_id = f"test-user-{uuid.uuid4().hex[:8]}"
+    token = f"test_session_{uuid.uuid4().hex[:12]}"
+    db.users.insert_one({"user_id": user_id, "email": f"{user_id}@example.com", "name": "Test User", "picture": None, "created_at": datetime.now(timezone.utc)})
+    db.user_sessions.insert_one({"user_id": user_id, "session_token": token, "expires_at": datetime.now(timezone.utc) + timedelta(days=7), "created_at": datetime.now(timezone.utc)})
+    session.headers["Authorization"] = f"Bearer {token}"
+    yield session
+    db.users.delete_one({"user_id": user_id})
+    db.user_sessions.delete_one({"session_token": token})
 
 
 def test_health_endpoint(api_client):
@@ -25,20 +50,39 @@ def test_health_endpoint(api_client):
     assert response.json()["message"] == "TECH SICK Intelligence API online"
 
 
-def test_analyze_rejects_malformed_profile_input(api_client):
-    response = api_client.post(f"{BASE_URL}/api/analyze", json={"profile_url": "!"})
+def test_auth_me_requires_sign_in(api_client):
+    response = api_client.get(f"{BASE_URL}/api/auth/me")
+    assert response.status_code == 401
+
+
+def test_auth_me_returns_user_with_valid_session(auth_client):
+    response = auth_client.get(f"{BASE_URL}/api/auth/me")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["user_id"].startswith("test-user-")
+    assert payload["email"].endswith("@example.com")
+    assert "_id" not in payload
+
+
+def test_analyze_requires_sign_in(api_client):
+    response = api_client.post(f"{BASE_URL}/api/analyze", json={"profile_url": "@glossier"})
+    assert response.status_code == 401
+
+
+def test_analyze_rejects_malformed_profile_input(auth_client):
+    response = auth_client.post(f"{BASE_URL}/api/analyze", json={"profile_url": "!"})
     assert response.status_code == 422
     assert "detail" in response.json()
 
 
-def test_analyze_rejects_non_instagram_profile_host(api_client):
-    response = api_client.post(f"{BASE_URL}/api/analyze", json={"profile_url": "https://notinstagram.com/brand"})
+def test_analyze_rejects_non_instagram_profile_host(auth_client):
+    response = auth_client.post(f"{BASE_URL}/api/analyze", json={"profile_url": "https://notinstagram.com/brand"})
     assert response.status_code == 400
     assert "valid public Instagram profile URL" in response.json()["detail"]
 
 
-def test_analyze_live_profile_returns_profile_intelligence(api_client):
-    response = api_client.post(f"{BASE_URL}/api/analyze", json={"profile_url": "@glossier"}, timeout=30)
+def test_analyze_live_profile_returns_profile_intelligence(auth_client):
+    response = auth_client.post(f"{BASE_URL}/api/analyze", json={"profile_url": "@glossier"}, timeout=30)
     assert response.status_code == 200
     payload = response.json()
     assert payload["profile"]["username"] == "glossier"

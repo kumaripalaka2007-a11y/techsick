@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -8,13 +8,14 @@ from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Any
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import re
 import json
 from urllib.parse import urlparse
 from fastapi.concurrency import run_in_threadpool
 from apify_client import ApifyClient
 from emergentintegrations.llm.chat import LlmChat, UserMessage, TextDelta
+import httpx
 
 
 ROOT_DIR = Path(__file__).parent
@@ -51,6 +52,61 @@ class AnalyzeResponse(BaseModel):
     intelligence: dict
     source: str
     analyzed_at: str
+
+class SessionRequest(BaseModel):
+    session_id: str
+
+@api_router.post("/auth/session")
+async def create_auth_session(input: SessionRequest, response: Response):
+    async with httpx.AsyncClient(timeout=10) as http:
+        res = await http.get("https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data", headers={"X-Session-ID": input.session_id})
+    if res.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid or expired sign-in session.")
+    data = res.json()
+    user = await db.users.find_one({"email": data["email"]}, {"_id": 0})
+    if user:
+        user_id = user["user_id"]
+        await db.users.update_one({"user_id": user_id}, {"$set": {"name": data["name"], "picture": data.get("picture")}})
+    else:
+        user_id = f"user_{uuid.uuid4().hex[:12]}"
+        await db.users.insert_one({"user_id": user_id, "email": data["email"], "name": data["name"], "picture": data.get("picture"), "created_at": datetime.now(timezone.utc)})
+    await db.user_sessions.insert_one({"user_id": user_id, "session_token": data["session_token"], "expires_at": datetime.now(timezone.utc) + timedelta(days=7), "created_at": datetime.now(timezone.utc)})
+    response.set_cookie("session_token", data["session_token"], path="/", secure=True, httponly=True, samesite="none", max_age=7 * 24 * 3600)
+    return {"user_id": user_id, "email": data["email"], "name": data["name"], "picture": data.get("picture")}
+
+async def get_current_user(request: Request) -> dict:
+    token = request.cookies.get("session_token")
+    auth = request.headers.get("Authorization", "")
+    if not token and auth.startswith("Bearer "):
+        token = auth[7:]
+    if not token:
+        raise HTTPException(status_code=401, detail="Sign in with Google to run a live analysis.")
+    session = await db.user_sessions.find_one({"session_token": token}, {"_id": 0})
+    if not session:
+        raise HTTPException(status_code=401, detail="Sign in with Google to run a live analysis.")
+    expires_at = session["expires_at"]
+    if isinstance(expires_at, str):
+        expires_at = datetime.fromisoformat(expires_at)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=401, detail="Session expired. Please sign in again.")
+    user = await db.users.find_one({"user_id": session["user_id"]}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found.")
+    return user
+
+@api_router.get("/auth/me")
+async def auth_me(user: dict = Depends(get_current_user)):
+    return user
+
+@api_router.post("/auth/logout")
+async def auth_logout(request: Request, response: Response):
+    token = request.cookies.get("session_token")
+    if token:
+        await db.user_sessions.delete_one({"session_token": token})
+    response.delete_cookie("session_token", path="/", secure=True, httponly=True, samesite="none")
+    return {"ok": True}
 
 # Add your routes to the router instead of directly to app
 @api_router.get("/")
@@ -101,7 +157,7 @@ async def classify_profile(raw: dict) -> dict:
         raise RuntimeError("Gemini returned an unreadable analysis.") from exc
 
 @api_router.post("/analyze", response_model=AnalyzeResponse)
-async def analyze_profile(input: AnalyzeRequest):
+async def analyze_profile(input: AnalyzeRequest, user: dict = Depends(get_current_user)):
     url = normalize_profile_url(input.profile_url)
     try:
         raw = await run_in_threadpool(scrape_profile, url)
@@ -113,7 +169,7 @@ async def analyze_profile(input: AnalyzeRequest):
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     profile = {key: raw.get(key) for key in ["username", "fullName", "biography", "externalUrl", "externalUrls", "followersCount", "followsCount", "postsCount", "verified", "isBusinessAccount", "businessCategoryName", "profilePicUrl", "profilePicUrlHD"]}
     response = {"profile": profile, "intelligence": intelligence, "source": "Apify public Instagram Scraper + Gemini 3 Flash", "analyzed_at": datetime.now(timezone.utc).isoformat()}
-    await db.analysis_runs.insert_one({**response, "created_at": response["analyzed_at"]})
+    await db.analysis_runs.insert_one({**response, "user_id": user["user_id"], "created_at": response["analyzed_at"]})
     return response
 
 @api_router.post("/status", response_model=StatusCheck)

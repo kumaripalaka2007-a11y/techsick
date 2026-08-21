@@ -1,0 +1,32 @@
+{
+  "app_type": "hybrid_fullstack",
+  "theme": "dark",
+  "typography": {
+    "headings": "Poppins, sans-serif",
+    "body": "Inter, sans-serif",
+    "code": "JetBrains Mono, monospace"
+  },
+  "colors": {
+    "background_primary": "#090D16",
+    "background_secondary": "#0B0F19",
+    "card_background": "rgba(15, 23, 42, 0.75)",
+    "border": "rgba(255, 255, 255, 0.1)",
+    "neon_cyan": "#00F5FF",
+    "electric_purple": "#A855F7",
+    "magenta": "#EC4899",
+    "text_primary": "#F8FAFC",
+    "text_secondary": "#94A3B8"
+  },
+  "image_urls": {
+    "cyber_background": "https://images.unsplash.com/photo-1672872476232-da16b45c9001?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NTYxODd8MHwxfHNlYXJjaHwyfHxjeWJlcnB1bmslMjBuZW9uJTIwdGVjaCUyMGFic3RyYWN0JTIwYmFja2dyb3VuZHxlbnwwfHx8fDE3ODcyODI1MDR8MA&ixlib=rb-4.1.0&q=85",
+    "dashboard_analytics": "https://images.unsplash.com/photo-1551288049-bebda4e38f71?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1NzZ8MHwxfHNlYXJjaHwxfHxidXNpbmVzcyUyMGludGVsbGlnZW5jZSUyMGFuYWx5dGljcyUyMGRhc2hib2FyZCUyMGRhcmt8ZW58MHx8fHwxNzg3MjgyNTA0fDA&ixlib=rb-4.1.0&q=85",
+    "avatar_profile": "https://images.unsplash.com/photo-1740252117027-4275d3f84385?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2NzV8MHwxfHNlYXJjaHwxfHxpbnN0YWdyYW0lMjBpbmZsdWVuY2VyJTIwYnVzaW5lc3MlMjBwcm9maWxlJTIwYXZhdGFyfGVufDB8fHx8MTc4NzI4MjUwNHww&ixlib=rb-4.1.0&q=85"
+  },
+  "component_path": "/app/frontend/src/App.js",
+  "instructions_to_main_agent": "Ensure full interactivity including live Instagram handle simulation or fallback API extraction powered by Gemini 3 Flash and Emergent LLM key. Include Bento grids, interactive profile intelligence dashboard, problem/solution split comparison, 4-step architecture pipeline, JSON/CSV export, and tabbed code preview for team TECH SICK.",
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": [
+    "Every interactive and key informational element MUST include a data-testid attribute.",
+    "Do not use transparent background in overlays or headers without blur.",
+    "Keep typography and spacing generous and clean."
+  ]
+}

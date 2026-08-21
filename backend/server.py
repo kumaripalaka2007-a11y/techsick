@@ -140,11 +140,41 @@ def scrape_profile(url: str) -> dict:
         raise RuntimeError("Apify returned no public profile data for this handle.")
     return items[0]
 
+def build_ai_context(raw: dict) -> dict:
+    posts = raw.get("latestPosts") or []
+    captions = [(p.get("caption") or "")[:280] for p in posts[:12] if isinstance(p, dict)]
+    hashtags = sorted({tag for cap in captions for tag in re.findall(r"#(\w+)", cap)})[:20]
+    return {
+        "username": raw.get("username"), "fullName": raw.get("fullName"), "biography": raw.get("biography"),
+        "externalUrl": raw.get("externalUrl"), "businessCategoryName": raw.get("businessCategoryName"),
+        "isBusinessAccount": raw.get("isBusinessAccount"), "verified": raw.get("verified"),
+        "followersCount": raw.get("followersCount"), "followsCount": raw.get("followsCount"),
+        "postsCount": raw.get("postsCount"), "recent_captions": captions, "hashtags": hashtags,
+    }
+
 async def classify_profile(raw: dict) -> dict:
     key = os.environ.get("EMERGENT_LLM_KEY")
     if not key:
         raise RuntimeError("EMERGENT_LLM_KEY is not configured.")
-    prompt = f'''Analyze this public Instagram profile for commercial intelligence. Return ONLY valid JSON with keys: classification (string), pillars (array of strings), email (string|null), whatsapp (string|null), landing_page (string|null), lead_score (integer 0-100), fit_label (string), rationale (string), signals (array of strings). Never invent contact details. Profile: {json.dumps(raw, ensure_ascii=True)}'''
+    prompt = f'''Analyze this public Instagram profile for commercial intelligence. Return ONLY valid JSON with these keys:
+- classification (string like "B2C E-Commerce" or "B2B SaaS")
+- pillars (array of 3 content pillar strings)
+- email, whatsapp, landing_page (string or null; never invent contact details)
+- lead_score (integer 0-100), fit_label (string like "HIGH FIT"), rationale (string), signals (array of strings)
+- niche_category (exactly one of: "Tech & Dev", "Fitness & Wellness", "Fashion & Lifestyle", "Food & Local Business", "Creator & Art", "SaaS & B2B", "Beauty & Skincare", "Other")
+- niche_archetype (short label like "Tech & SaaS Creator" or "Fitness & Nutrition Coach")
+- sub_niches (array of 3-5 hashtag strings like "#NextJS" or "#GymMotivation")
+- palette (array of 4 hex color strings representing the brand visual identity, inferred from niche, bio and captions)
+- visual_style_tags (array of 2-3 tags like "Minimalist", "Vibrant", "UGC-driven")
+- consistency_score (integer 1-100 rating visual brand consistency)
+- hook_archetypes (array of 3 objects {{"name": string, "share": integer}} with shares summing to 100; names like "Problem-Solution", "Storytelling", "Promotional", "Educational", "Behind-the-Scenes")
+- content_mix (array of 3-4 objects {{"label": string, "pct": integer}} with pct summing to 100; labels like "Tutorials", "Reviews", "Lifestyle")
+- audience (object {{"age_range": string like "18-24", "interests": array of 3 strings, "gender_split": {{"female": integer, "male": integer}} with values summing to 100}})
+- buyer_persona (object {{"demographics": string, "pain_points": array of 3 strings, "buying_intent": string}})
+- sponsorship_readiness (exactly one of "Low", "Medium", "High", based on posting consistency, promo ratio and engagement signals)
+- collab_fit_score (integer 1-100 brand partnership readiness)
+- pitch (80-120 word personalized cold outreach email referencing this brand's gaps and recent content themes)
+Base everything on the provided data only. Profile: {json.dumps(build_ai_context(raw), ensure_ascii=True)}'''
     chat = LlmChat(api_key=key, session_id=f"profile-{uuid.uuid4()}", system_message="You are a precise B2B social intelligence analyst. Output strict JSON.").with_model("gemini", "gemini-3-flash-preview")
     result = ""
     async for event in chat.stream_message(UserMessage(text=prompt)):

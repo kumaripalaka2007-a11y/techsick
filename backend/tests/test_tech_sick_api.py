@@ -91,3 +91,15 @@ def test_analyze_live_profile_returns_profile_intelligence(auth_client):
     assert 0 <= payload["intelligence"]["lead_score"] <= 100
     assert payload["source"]
     assert payload["analyzed_at"]
+    intel = payload["intelligence"]
+    assert intel["niche_category"] in ["Tech & Dev", "Fitness & Wellness", "Fashion & Lifestyle", "Food & Local Business", "Creator & Art", "SaaS & B2B", "Beauty & Skincare", "Other"]
+    assert isinstance(intel["sub_niches"], list) and intel["sub_niches"]
+    assert isinstance(intel["palette"], list) and all(c.startswith("#") for c in intel["palette"])
+    assert 1 <= intel["consistency_score"] <= 100
+    assert 1 <= intel["collab_fit_score"] <= 100
+    assert intel["sponsorship_readiness"] in ["Low", "Medium", "High"]
+    assert intel["audience"]["age_range"]
+    assert intel["buyer_persona"]["pain_points"]
+    assert sum(h["share"] for h in intel["hook_archetypes"]) == 100
+    assert sum(m["pct"] for m in intel["content_mix"]) == 100
+    assert len(intel["pitch"]) > 100

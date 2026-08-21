@@ -108,6 +108,22 @@ async def auth_logout(request: Request, response: Response):
     response.delete_cookie("session_token", path="/", secure=True, httponly=True, samesite="none")
     return {"ok": True}
 
+ALLOWED_IMAGE_HOST_MARKERS = ("cdninstagram.com", "scontent", "instagram.com", "fbcdn.net")
+
+@api_router.get("/proxy-image")
+async def proxy_image(url: str):
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname or not any(marker in parsed.hostname for marker in ALLOWED_IMAGE_HOST_MARKERS):
+        raise HTTPException(status_code=400, detail="Unsupported image host.")
+    try:
+        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as http:
+            res = await http.get(url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Referer": "https://www.instagram.com/"})
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="Could not fetch the image from Instagram CDN.") from exc
+    if res.status_code != 200 or not res.content:
+        raise HTTPException(status_code=502, detail="Image source rejected the request.")
+    return Response(content=res.content, media_type=res.headers.get("content-type", "image/jpeg"), headers={"Cache-Control": "public, max-age=86400"})
+
 # Add your routes to the router instead of directly to app
 @api_router.get("/")
 async def root():
@@ -198,6 +214,7 @@ async def analyze_profile(input: AnalyzeRequest, user: dict = Depends(get_curren
         logger.warning("Profile analysis failed: %s", exc)
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     profile = {key: raw.get(key) for key in ["username", "fullName", "biography", "externalUrl", "externalUrls", "followersCount", "followsCount", "postsCount", "verified", "isBusinessAccount", "businessCategoryName", "profilePicUrl", "profilePicUrlHD"]}
+    profile["profile_pic_url"] = raw.get("profilePicUrlHD") or raw.get("profilePicUrl")
     response = {"profile": profile, "intelligence": intelligence, "source": "Apify public Instagram Scraper + Gemini 3 Flash", "analyzed_at": datetime.now(timezone.utc).isoformat()}
     await db.analysis_runs.insert_one({**response, "user_id": user["user_id"], "created_at": response["analyzed_at"]})
     return response

@@ -64,6 +64,17 @@ def test_auth_me_returns_user_with_valid_session(auth_client):
     assert "_id" not in payload
 
 
+def test_proxy_image_rejects_unsupported_host(auth_client):
+    response = auth_client.get(f"{BASE_URL}/api/proxy-image", params={"url": "https://evil.example.com/pic.jpg"})
+    assert response.status_code == 400
+    assert "Unsupported image host" in response.json()["detail"]
+
+
+def test_proxy_image_rejects_non_https(auth_client):
+    response = auth_client.get(f"{BASE_URL}/api/proxy-image", params={"url": "http://scontent.cdninstagram.com/pic.jpg"})
+    assert response.status_code == 400
+
+
 def test_analyze_requires_sign_in(api_client):
     response = api_client.post(f"{BASE_URL}/api/analyze", json={"profile_url": "@glossier"})
     assert response.status_code == 401
@@ -86,6 +97,8 @@ def test_analyze_live_profile_returns_profile_intelligence(auth_client):
     assert response.status_code == 200
     payload = response.json()
     assert payload["profile"]["username"] == "glossier"
+    assert payload["profile"]["profile_pic_url"]
+    assert payload["profile"]["profile_pic_url"].startswith("https://")
     assert payload["intelligence"]["classification"]
     assert isinstance(payload["intelligence"]["pillars"], list)
     assert 0 <= payload["intelligence"]["lead_score"] <= 100

@@ -21,6 +21,8 @@ Create a modern, colorful, dark-themed SaaS web application for “AI-Based Inst
 
 - 2026-08-21: Batch competitor comparison — head-to-head now supports up to 4 profiles (primary + 3 competitors): add handles one at a time, removable competitor chips, duplicate/self-add protection, dynamic N-column metric table (lead score, consistency, collab fit, followers, posts, niche, sponsorship, top themes) with per-metric winner highlighting. Live verified with @glossier vs @notionhq vs @allbirds.
 
+- 2026-08-21: Instagram PFP loading fix — added backend `/api/proxy-image?url=` endpoint (host allowlist for scontent/cdninstagram/fbcdn, https-only, 15s timeout, 24h cache header) to bypass expiring Instagram CDN links and referrer blocks; analysis response now returns normalized `profile_pic_url` (highest-resolution profilePicUrlHD first); frontend Avatar component loads Instagram images through the proxy with `referrerPolicy="no-referrer"` + `crossOrigin="anonymous"`, falls back to a gradient initials avatar on error, and renders inside a story-style conic-gradient ring. Backend tests extended to 9 (proxy host validation + live `profile_pic_url` assertion); live browser run confirmed avatar loads at 320x320 through the proxy.
+
 ## Prioritized backlog
 - P0: Complete — a valid `APIFY_TOKEN` is configured and live public-profile extraction is verified.
 - P0: Complete — Emergent-managed Google sign-in with session-cookie auth and auth-gated live analyzer.

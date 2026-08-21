@@ -18,11 +18,11 @@ Create a modern, colorful, dark-themed SaaS web application for “AI-Based Inst
 - Build, lint, API regression, desktop interaction, mobile interaction, and mobile overflow checks completed successfully.
 
 ## Prioritized backlog
-- P0: Add a valid `APIFY_TOKEN` to `/app/backend/.env` to enable live public-profile extraction.
+- P0: Complete — a valid `APIFY_TOKEN` is configured and live public-profile extraction is verified.
 - P1: Add webhook configuration for the CRM push action.
 - P1: Add persisted analysis history and a recent-runs view.
 - P2: Add phase-two reels transcription and visual content tags.
 
 ## Next tasks
-- Validate one live public profile end-to-end after the Apify token is added.
+- Live-validated `@glossier` end-to-end: Apify profile details → Gemini classification/score → dashboard replacement.
 - Add authenticated workspace history when the product needs multi-user access.

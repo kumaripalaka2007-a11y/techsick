@@ -37,7 +37,13 @@ def test_analyze_rejects_non_instagram_profile_host(api_client):
     assert "valid public Instagram profile URL" in response.json()["detail"]
 
 
-def test_analyze_reports_missing_apify_token(api_client):
+def test_analyze_live_profile_returns_profile_intelligence(api_client):
     response = api_client.post(f"{BASE_URL}/api/analyze", json={"profile_url": "@glossier"}, timeout=30)
-    assert response.status_code == 503
-    assert "APIFY_TOKEN is not configured" in response.json()["detail"]
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["profile"]["username"] == "glossier"
+    assert payload["intelligence"]["classification"]
+    assert isinstance(payload["intelligence"]["pillars"], list)
+    assert 0 <= payload["intelligence"]["lead_score"] <= 100
+    assert payload["source"]
+    assert payload["analyzed_at"]
